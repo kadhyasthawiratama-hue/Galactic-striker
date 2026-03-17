@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Galactic Striker - God Slayer</title>
+    <style>
+        body { margin: 0; background: #010103; overflow: hidden; font-family: 'Segoe UI', sans-serif; touch-action: none; color: white; }
+        canvas { display: block; background: radial-gradient(circle, #050515 0%, #000 100%); margin: auto; }
+        
+        #ui { position: absolute; top: 15px; left: 15px; pointer-events: none; z-index: 10; width: 220px; }
+        .stat { margin-bottom: 5px; font-weight: bold; text-shadow: 2px 2px 4px #000; font-size: 0.9em; }
+        
+        .hp-container { width: 100%; height: 10px; background: #333; border: 1px solid #fff; border-radius: 5px; overflow: hidden; margin-top: 3px; }
+        #player-hp-fill { width: 100%; height: 100%; background: #00ff00; transition: width 0.2s; }
+        
+        #boss-ui { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); width: 70%; display: none; text-align: center; z-index: 10;}
+        .boss-hp-bg { background: #222; height: 15px; border: 2px solid #fff; border-radius: 8px; overflow: hidden; margin-top: 5px; }
+        #boss-hp-fill { width: 100%; height: 100%; background: #ff0000; }
+
+        .modal {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(5, 5, 20, 0.98); padding: 25px; text-align: center;
+            border-radius: 20px; display: none; z-index: 200; width: 85%; max-width: 400px;
+            box-shadow: 0 0 30px rgba(0, 212, 255, 0.4);
+        }
+        #skill-menu { border: 3px solid #00d4ff; }
+        #victory-screen { border: 5px solid #fbff00; background: linear-gradient(135deg, #000, #1a1a00); }
+        #game-over { border: 3px solid #ff0000; }
+        
+        .skill-card {
+            background: #0a0a25; margin: 10px 0; padding: 12px; border-radius: 10px;
+            cursor: pointer; border: 1px solid #00d4ff; transition: 0.2s;
+        }
+        .skill-card:hover { background: #151540; transform: scale(1.03); border-color: #fbff00; }
+        
+        .btn { 
+            background: #00d4ff; border: none; padding: 12px 20px; font-weight: bold; 
+            cursor: pointer; border-radius: 8px; margin: 5px; color: #000; 
+            text-transform: uppercase; transition: 0.2s;
+        }
+        .btn:hover { background: #fbff00; }
+        .btn-save { background: #00ff88; }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <div class="stat" style="color:#ff0055">LEVEL: <span id="lvl">1</span></div>
+        <div class="stat" style="color:#00d4ff">SCORE: <span id="sc">0</span></div>
+        <div class="stat">HULL INTEGRITY: <span id="hp-text">100/100</span></div>
+        <div class="hp-container"><div id="player-hp-fill"></div></div>
+    </div>
+
+    <div id="boss-ui">
+        <b id="boss-name" style="color:white; text-shadow: 0 0 10px #fff; letter-spacing: 2px;">BOSS INCOMING</b>
+        <div class="boss-hp-bg"><div id="boss-hp-fill"></div></div>
+    </div>
+
+    <div id="skill-menu" class="modal">
+        <h2 style="color: #fbff00; margin-top:0;">SYSTEM UPGRADE</h2>
+        <div id="skill-options"></div>
+    </div>
+
+    <div id="victory-screen" class="modal">
+        <h1 style="color: #fbff00; font-size: 2.5em; margin-bottom: 5px;">VICTORY!</h1>
+        <p>Kamu telah mengalahkan Sang Penguasa Galaksi!</p>
+        <div id="final-stats-v"></div>
+        <button class="btn" onclick="location.reload()">MAIN LAGI</button>
+        <button class="btn btn-save" onclick="saveGame()">SIMPAN PROGRES</button>
+    </div>
+
+    <div id="game-over" class="modal">
+        <h1 style="color: #ff0000;">MISSION FAILED</h1>
+        <p id="final-stats-g"></p>
+        <button class="btn" onclick="location.reload()">COBA LAGI</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+/** * KONFIGURASI UTAMA 
+ */
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+function resize() {
+    canvas.width = window.innerWidth > 600 ? 500 : window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Assets
+const imgPlayer = new Image(); imgPlayer.src = 'https://cdn-icons-png.flaticon.com/512/619/619175.png';
+const imgEnemy = new Image(); imgEnemy.src = 'https://cdn-icons-png.flaticon.com/512/5436/5436357.png';
+const imgBoss = new Image(); imgBoss.src = 'https://cdn-icons-png.flaticon.com/512/2590/2590204.png';
+
+let level = 1;
+let score = 0;
+let lastSkillScore = 0;
+let gameOver = false;
+let victory = false;
+let isPaused = false;
+let moveX = canvas.width / 2;
+let bossMode = false;
+let currentBoss = null;
+
+const player = {
+    w: 50, h: 50, x: canvas.width/2 - 25, y: canvas.height - 120,
+    hp: 100, maxHp: 100, regen: 0, lerp: 0.15,
+    fireRate: 350, bulletW: 6, bulletH: 18, bulletCount: 1, sideCannonLvl: 0
+};
+
+const bullets = [];
+const enemyBullets = []; // Juga dipakai untuk boss
+const enemies = [];
+const bossLasers = []; // Visual untuk skill 2 boss
+
+const skills = [
+    { id:'hp', name:'Health+', desc:'Max HP +50', action:() => { player.maxHp += 50; player.hp += 50; updateUI(); } },
+    { id:'regen', name:'Nanobots', desc:'Regenerasi HP otomatis', action:() => player.regen += 0.08 },
+    { id:'multi', name:'Multi-Shot+', desc:'Tambah meriam utama', action:() => player.bulletCount++ },
+    { id:'rapid', name:'Hyper-Cooler', desc:'Jeda tembak -15%', action:() => player.fireRate = Math.max(70, player.fireRate - 55) },
+    { id:'side', name:'Wing Cannons+', desc:'Tambah meriam sayap', action:() => player.sideCannonLvl++ }
+];
+
+/** * CONTROLS 
+ */
+canvas.addEventListener("mousemove", (e) => { if(!isPaused) moveX = e.clientX - canvas.offsetLeft; });
+canvas.addEventListener("touchmove", (e) => { if(!isPaused) moveX = e.touches[0].clientX - canvas.offsetLeft; e.preventDefault(); }, {passive:false});
+
+function updateUI() {
+    const pct = (player.hp / player.maxHp) * 100;
+    document.getElementById("player-hp-fill").style.width = Math.max(0, pct) + "%";
+    document.getElementById("hp-text").innerText = `${Math.ceil(player.hp)}/${player.maxHp}`;
+    document.getElementById("sc").innerText = score;
+    document.getElementById("lvl").innerText = level;
+}
+
+/** * BOSS LOGIC 
+ */
+function spawnBoss() {
+    bossMode = true;
+    let hp = 500 + ((level/10 - 1) * 100);
+    if(level >= 50) hp = 10000; // BOSS AKHIR
+
+    currentBoss = {
+        x: canvas.width/2 - 80, y: -200, w: 160, h: 160,
+        hp: hp, maxHp: hp, speed: 1.5, dir: 1,
+        lastSkill1: 0, // Area
+        lastSkill2: 0, // Laser
+        lastSkill3: 0  // Minion
+    };
+    
+    document.getElementById("boss-ui").style.display = "block";
+    document.getElementById("boss-name").innerText = level >= 50 ? "VOID GOD (FINAL BOSS)" : `WHITE OVERLORD LVL ${level}`;
+    updateBossHP();
+}
+
+function updateBossHP() {
+    const pct = (currentBoss.hp / currentBoss.maxHp) * 100;
+    document.getElementById("boss-hp-fill").style.width = Math.max(0, pct) + "%";
+}
+
+function bossSkill1() { // Burst Area
+    for(let i=0; i<8; i++) {
+        let angle = (Math.PI*2 / 8) * i;
+        enemyBullets.push({
+            x: currentBoss.x + currentBoss.w/2, y: currentBoss.y + currentBoss.h/2,
+            w: 8, h: 8, vx: Math.cos(angle) * 4, vy: Math.sin(angle) * 4
+        });
+    }
+}
+
+function bossSkill2() { // Random Lasers
+    const x = Math.random() * canvas.width;
+    bossLasers.push({ x: x, w: 20, life: 60 }); // life = frame countdown
+}
+
+function bossSkill3() { // Summon Minions
+    for(let i=0; i<2; i++) {
+        enemies.push({
+            x: currentBoss.x + (i * 100), y: currentBoss.y + currentBoss.h,
+            w: 40, h: 40, speed: 4, hp: 1, isMinion: true
+        });
+    }
+}
+
+/** * GAME LOOP LOGIC 
+ */
+function spawnEnemy() {
+    if (gameOver || victory || isPaused || bossMode) return;
+    const size = 42;
+    enemies.push({
+        x: Math.random() * (canvas.width - size), y: -size, w: size, h: size,
+        speed: 3, hp: 1 + Math.floor(level/6), 
+        lastShot: Math.random() * 2000 // Jeda nembak acak di awal
+    });
+}
+
+function playerShoot(time) {
+    if(time - lastShot > player.fireRate) {
+        const startX = player.x + player.w/2 - ((player.bulletCount-1)*12)/2 - player.bulletW/2;
+        for(let i=0; i<player.bulletCount; i++) {
+            bullets.push({ x: startX + (i*12), y: player.y, w: player.bulletW, h: player.bulletH });
+        }
+        for(let i=1; i<=player.sideCannonLvl; i++) {
+            bullets.push({ x: player.x - (i*15), y: player.y + 20, w: 4, h: 12 });
+            bullets.push({ x: player.x + player.w + (i*15) - 4, y: player.y + 20, w: 4, h: 12 });
+        }
+        lastShot = time;
+    }
+}
+
+function showSkillMenu() {
+    isPaused = true;
+    const options = document.getElementById("skill-options");
+    options.innerHTML = "";
+    const selected = [...skills].sort(() => 0.5 - Math.random()).slice(0, 3);
+    selected.forEach(s => {
+        const div = document.createElement("div");
+        div.className = "skill-card";
+        div.innerHTML = `<b>${s.name}</b><br><small>${s.desc}</small>`;
+        div.onclick = () => { s.action(); isPaused = false; document.getElementById("skill-menu").style.display="none"; };
+        options.appendChild(div);
+    });
+    document.getElementById("skill-menu").style.display = "block";
+}
+
+function update(time) {
+    if (gameOver || victory || isPaused) return;
+
+    // Regen
+    if(player.hp < player.maxHp) {
+        player.hp = Math.min(player.maxHp, player.hp + player.regen);
+        updateUI();
+    }
+
+    playerShoot(time);
+    player.x += (moveX - player.w/2 - player.x) * player.lerp;
+
+    // Player Bullets vs Enemies/Boss
+    for(let i=bullets.length-1; i>=0; i--) {
+        bullets[i].y -= 14;
+        let b = bullets[i];
+        if(bossMode && currentBoss) {
+            if(b.x < currentBoss.x+currentBoss.w && b.x+b.w > currentBoss.x && b.y < currentBoss.y+currentBoss.h && b.y > currentBoss.y) {
+                currentBoss.hp--; bullets.splice(i, 1);
+                updateBossHP();
+                if(currentBoss.hp <= 0) {
+                    if(level >= 50) triggerVictory();
+                    else {
+                        bossMode = false; score += 500; level++;
+                        document.getElementById("boss-ui").style.display = "none";
+                        currentBoss = null; showSkillMenu();
+                    }
+                }
+                continue;
+            }
+        }
+        for(let j=enemies.length-1; j>=0; j--) {
+            let en = enemies[j];
+            if(b.x < en.x+en.w && b.x+b.w > en.x && b.y < en.y+en.h && b.y > en.y) {
+                en.hp--; bullets.splice(i, 1);
+                if(en.hp <= 0) {
+                    enemies.splice(j, 1); score += 10;
+                    if(score % 100 === 0 && score > lastSkillScore) {
+                        lastSkillScore = score; level++;
+                        if(level % 10 === 0) spawnBoss(); else showSkillMenu();
+                    }
+                }
+                updateUI(); break;
+            }
+        }
+        if(b && b.y < -30) bullets.splice(i, 1);
+    }
+
+    // Enemy Bullets Logic
+    for(let i=enemyBullets.length-1; i>=0; i--) {
+        let eb = enemyBullets[i];
+        eb.x += (eb.vx || 0);
+        eb.y += (eb.vy || 6);
+        if(eb.x < player.x+player.w && eb.x+eb.w > player.x && eb.y < player.y+player.h && eb.y+eb.h > player.y) {
+            player.hp -= 15; updateUI(); enemyBullets.splice(i, 1);
+            if(player.hp <= 0) triggerGameOver();
+        }
+        if(eb.y > canvas.height || eb.y < -100 || eb.x < -100 || eb.x > canvas.width + 100) enemyBullets.splice(i, 1);
+    }
+
+    // Random Lasers Logic
+    for(let i=bossLasers.length-1; i>=0; i--) {
+        let l = bossLasers[i];
+        l.life--;
+        if(l.life < 10 && l.life > 0) { // Laser aktif di sisa 10 frame terakhir
+            if(player.x < l.x+l.w && player.x+player.w > l.x) {
+                player.hp -= 2; updateUI(); // Damage per frame
+                if(player.hp <= 0) triggerGameOver();
+            }
+        }
+        if(l.life <= 0) bossLasers.splice(i, 1);
+    }
+
+    // Boss Phase & Skills
+    if(bossMode && currentBoss) {
+        if(currentBoss.y < 70) currentBoss.y += 1.5;
+        currentBoss.x += currentBoss.speed * currentBoss.dir;
+        if(currentBoss.x <= 0 || currentBoss.x >= canvas.width - currentBoss.w) currentBoss.dir *= -1;
+        
+        // Skill Timers
+        if(time - currentBoss.lastSkill1 > 3500) { bossSkill1(); currentBoss.lastSkill1 = time; }
+        if(time - currentBoss.lastSkill2 > 2000) { bossSkill2(); currentBoss.lastSkill2 = time; }
+        if(time - currentBoss.lastSkill3 > 6000) { bossSkill3(); currentBoss.lastSkill3 = time; }
+    }
+
+    // Normal Enemies Shoot
+    enemies.forEach(en => {
+        en.y += en.speed;
+        if(!en.isMinion && !en.lastShot) en.lastShot = time;
+        if(!en.isMinion && time - en.lastShot > 2000) {
+            enemyBullets.push({ x: en.x + en.w/2 - 3, y: en.y + en.h, w: 6, h: 15 });
+            en.lastShot = time;
+        }
+        if(en.x < player.x+player.w && en.x+en.w > player.x && en.y < player.y+player.h && en.y+en.h > player.y) {
+            player.hp -= 30; updateUI(); enemies.splice(enemies.indexOf(en), 1);
+            if(player.hp <= 0) triggerGameOver();
+        }
+        if(en.y > canvas.height) enemies.splice(enemies.indexOf(en), 1);
+    });
+}
+
+function triggerGameOver() {
+    gameOver = true;
+    document.getElementById("game-over").style.display = "block";
+    document.getElementById("final-stats-g").innerText = `SKOR: ${score} | LEVEL: ${level}`;
+}
+
+function triggerVictory() {
+    victory = true;
+    document.getElementById("victory-screen").style.display = "block";
+    document.getElementById("final-stats-v").innerText = `SCORE: ${score} | LEVEL: 50 COMPLETED!`;
+}
+
+function saveGame() {
+    const data = { score, level, player };
+    // Simulasi save (di env browser asli pakai localStorage)
+    console.log("Saving...", data);
+    const btn = document.querySelector('.btn-save');
+    btn.innerText = "TERSREPAN!";
+    setTimeout(() => btn.innerText = "SIMPAN PROGRES", 2000);
+}
+
+let lastSpawn = 0;
+let lastShot = 0;
+function draw(time) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Spawn Rate
+    const rate = Math.max(120, 1100 - (level * 35));
+    if(!isPaused && !bossMode && time - lastSpawn > rate) {
+        spawnEnemy(); lastSpawn = time;
+    }
+
+    // Draw Boss Lasers
+    bossLasers.forEach(l => {
+        ctx.fillStyle = l.life > 15 ? "rgba(255, 0, 0, 0.2)" : "rgba(255, 255, 255, 0.8)";
+        if(l.life < 10) ctx.fillStyle = "#ff0000";
+        ctx.fillRect(l.x, 0, l.w, canvas.height);
+        // Glow effect
+        if(l.life < 10) {
+            ctx.shadowBlur = 20; ctx.shadowColor = "red";
+            ctx.fillRect(l.x+5, 0, l.w-10, canvas.height);
+            ctx.shadowBlur = 0;
+        }
+    });
+
+    // Draw Entities
+    ctx.drawImage(imgPlayer, player.x, player.y, player.w, player.h);
+    
+    if(bossMode && currentBoss) {
+        ctx.save();
+        ctx.filter = "brightness(0) invert(1) drop-shadow(0 0 15px white)";
+        ctx.drawImage(imgBoss, currentBoss.x, currentBoss.y, currentBoss.w, currentBoss.h);
+        ctx.restore();
+    }
+
+    enemies.forEach(en => {
+        if(en.isMinion) ctx.filter = "hue-rotate(90deg)";
+        ctx.drawImage(imgEnemy, en.x, en.y, en.w, en.h);
+        ctx.filter = "none";
+    });
+
+    // Draw Projectiles
+    ctx.fillStyle = "#00ffcc";
+    bullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
+    
+    ctx.fillStyle = "#ff3300";
+    enemyBullets.forEach(eb => {
+        ctx.beginPath();
+        ctx.arc(eb.x + eb.w/2, eb.y + eb.h/2, eb.w, 0, Math.PI*2);
+        ctx.fill();
+    });
+
+    update(time);
+    requestAnimationFrame(draw);
+}
+
+window.onload = () => { updateUI(); draw(0); };
+</script>
+</body>
+</html>
+
